@@ -14,6 +14,14 @@ import streamlit as st
 from math_tutor.config import get_config
 from math_tutor.ingest import build_vector_store
 from math_tutor.rag_chain import build_rag_chain, convert_history
+from math_tutor.file_utils import (
+    extract_text_from_pdf,
+    extract_text_from_txt,
+    image_to_base64_uri,
+    is_image,
+    SUPPORTED_EXTS,
+)
+from streamlit_paste_button import paste_image_button
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -219,7 +227,9 @@ if "messages" not in st.session_state:
                 "ace your **2027 CBSE Board Exams**.\n\n"
                 "Tell me which chapter or topic you want to study, "
                 "or ask me to generate **important formulae**, **HOTS questions**, "
-                "or **step-by-step solutions** for any chapter!"
+                "or **step-by-step solutions** for any chapter! "
+                "You can also **attach an image, PDF, or text file** using the 📎 button, "
+                "or **paste a screenshot** with the 📋 button."
             ),
         }
     ]
@@ -227,7 +237,54 @@ if "messages" not in st.session_state:
 # Display existing messages
 for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
+        if msg.get("attachment_name"):
+            st.caption(f"📎 **Attached:** `{msg['attachment_name']}`")
+            if msg.get("attachment_preview"):
+                with st.expander("👁️ Attachment preview", expanded=False):
+                    if msg.get("attachment_is_image"):
+                        st.image(msg["attachment_preview"], use_container_width=True)
+                    else:
+                        st.text(msg["attachment_preview"][:2000])
         st.markdown(msg["content"])
+
+
+# -- Helper: vision LLM call -----------------------------------------------
+def _ask_vision_llm(question: str, image_data_uri: str, context_text: str) -> str:
+    provider = get_config("LLM_PROVIDER", "openai").lower()
+    vision_content = [
+        {
+            "type": "text",
+            "text": (
+                "You are an expert Class 12 CBSE Mathematics teacher.\n\n"
+                f"Context from the student's study materials:\n{context_text}\n\n"
+                f"The student has attached an image and asks:\n{question}"
+            ),
+        },
+        {"type": "image_url", "image_url": {"url": image_data_uri}},
+    ]
+    if provider == "groq":
+        from openai import OpenAI
+        client = OpenAI(api_key=get_config("GROQ_API_KEY"), base_url="https://api.groq.com/openai/v1")
+        resp = client.chat.completions.create(
+            model=get_config("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
+            messages=[{"role": "user", "content": vision_content}],
+            max_tokens=4096, temperature=0.3,
+        )
+        return resp.choices[0].message.content
+    elif provider == "openai":
+        from openai import OpenAI
+        client = OpenAI(api_key=get_config("OPENAI_API_KEY"))
+        resp = client.chat.completions.create(
+            model=get_config("OPENAI_MODEL", "gpt-4o"),
+            messages=[{"role": "user", "content": vision_content}],
+            max_tokens=4096, temperature=0.3,
+        )
+        return resp.choices[0].message.content
+    else:
+        return (
+            "⚠️ **Image vision is not supported for the `watsonx` provider.** "
+            "Please switch to `groq` or `openai`, or describe your question in text."
+        )
 
 # ── Chat input ─────────────────────────────────────────────────────────────
 if user_input := st.chat_input("Ask your Math teacher …"):
@@ -243,15 +300,35 @@ if user_input := st.chat_input("Ask your Math teacher …"):
             recent_messages = st.session_state["messages"][:-1]
             if len(recent_messages) > 4:
                 recent_messages = recent_messages[-4:]
-            chat_history = convert_history(recent_messages)
+            clean_history = [{"role": m["role"], "content": m["content"]} for m in recent_messages]
+            chat_history = convert_history(clean_history)
 
             try:
-                result = st.session_state["rag_chain"].invoke({
-                    "question": user_input,
-                    "chat_history": chat_history,
-                })
-                answer = result["answer"]
-                sources = result.get("source_documents", [])
+                if attachment_image_uri is not None:
+                    retriever = st.session_state["vector_store"].as_retriever(
+                        search_type="mmr", search_kwargs={"k": 6, "fetch_k": 20},
+                    )
+                    source_docs = retriever.invoke(user_input)
+                    context_text = "\n\n".join(
+                        f"Document {i+1} (Source: {d.metadata.get('source','?')}, "
+                        f"Page: {d.metadata.get('page','?')}):\n{d.page_content}"
+                        for i, d in enumerate(source_docs)
+                    )
+                    answer = _ask_vision_llm(user_input, attachment_image_uri, context_text)
+                    sources = source_docs
+                elif attachment_text is not None:
+                    augmented = f"{user_input}\n\n--- Attached file: {attachment_name} ---\n{attachment_text}"
+                    result = st.session_state["rag_chain"].invoke(
+                        {"question": augmented, "chat_history": chat_history}
+                    )
+                    answer = result["answer"]
+                    sources = result.get("source_documents", [])
+                else:
+                    result = st.session_state["rag_chain"].invoke(
+                        {"question": user_input, "chat_history": chat_history}
+                    )
+                    answer = result["answer"]
+                    sources = result.get("source_documents", [])
 
                 st.markdown(answer)
 
