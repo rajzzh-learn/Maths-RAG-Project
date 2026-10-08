@@ -291,3 +291,140 @@ def _ask_vision_llm(question: str, image_data_uri: str, context_text: str) -> st
     )
     return response.text
 
+
+
+
+# -- Input area: file uploader + paste button + chat input -----------------
+ext_list = ", ".join(f".{e}" for e in sorted(SUPPORTED_EXTS))
+
+col_upload, col_paste = st.columns([3, 1], vertical_alignment="bottom")
+with col_upload:
+    uploaded_file = st.file_uploader(
+        f"📎 Attach a file — {ext_list}",
+        type=list(SUPPORTED_EXTS),
+        label_visibility="visible",
+        help="Attach an image (diagram / question screenshot), PDF, or .txt file.",
+    )
+with col_paste:
+    paste_result = paste_image_button(
+        "📋 Paste image",
+        background_color="#444654",
+        hover_background_color="#565869",
+        key="clipboard_paste",
+    )
+
+if user_input := st.chat_input("Ask your Mathematics teacher …"):
+    attachment_name: str | None = None
+    attachment_text: str | None = None
+    attachment_image_uri: str | None = None
+    attachment_preview = None
+    attachment_is_image = False
+
+    # Clipboard paste takes priority over file uploader
+    if paste_result.image_data is not None:
+        import io as _io
+        buf = _io.BytesIO()
+        paste_result.image_data.save(buf, format="PNG")
+        file_bytes = buf.getvalue()
+        attachment_name = "pasted-image.png"
+        attachment_image_uri, _ = image_to_base64_uri(file_bytes, attachment_name)
+        attachment_preview = file_bytes
+        attachment_is_image = True
+    elif uploaded_file is not None:
+        attachment_name = uploaded_file.name
+        file_bytes = uploaded_file.read()
+        if is_image(attachment_name):
+            attachment_image_uri, _ = image_to_base64_uri(file_bytes, attachment_name)
+            attachment_preview = file_bytes
+            attachment_is_image = True
+        elif attachment_name.lower().endswith(".pdf"):
+            attachment_text = extract_text_from_pdf(file_bytes)
+            attachment_preview = attachment_text
+        else:
+            attachment_text = extract_text_from_txt(file_bytes)
+            attachment_preview = attachment_text
+
+    user_msg: dict = {
+        "role": "user",
+        "content": user_input,
+        "attachment_name": attachment_name,
+        "attachment_preview": attachment_preview,
+        "attachment_is_image": attachment_is_image,
+    }
+    st.session_state["messages"].append(user_msg)
+
+    with st.chat_message("user"):
+        if attachment_name:
+            st.caption(f"📎 **Attached:** `{attachment_name}`")
+            if attachment_preview is not None:
+                with st.expander("👁️ Attachment preview", expanded=False):
+                    if attachment_is_image:
+                        st.image(attachment_preview, use_container_width=True)
+                    else:
+                        st.text(str(attachment_preview)[:2000])
+        st.markdown(user_input)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking …"):
+            recent_messages = st.session_state["messages"][:-1]
+            if len(recent_messages) > 4:
+                recent_messages = recent_messages[-4:]
+            clean_history = [{"role": m["role"], "content": m["content"]} for m in recent_messages]
+            chat_history = convert_history(clean_history)
+
+            try:
+                if attachment_image_uri is not None:
+                    retriever = st.session_state["vector_store"].as_retriever(
+                        search_type="mmr", search_kwargs={"k": 6, "fetch_k": 20},
+                    )
+                    source_docs = retriever.invoke(user_input)
+                    context_text = "\n\n".join(
+                        f"Document {i+1} (Source: {d.metadata.get('source','?')}, "
+                        f"Page: {d.metadata.get('page','?')}):\n{d.page_content}"
+                        for i, d in enumerate(source_docs)
+                    )
+                    answer = _ask_vision_llm(user_input, attachment_image_uri, context_text)
+                    sources = source_docs
+                elif attachment_text is not None:
+                    augmented = f"{user_input}\n\n--- Attached file: {attachment_name} ---\n{attachment_text}"
+                    result = st.session_state["rag_chain"].invoke(
+                        {"question": augmented, "chat_history": chat_history}
+                    )
+                    answer = result["answer"]
+                    sources = result.get("source_documents", [])
+                else:
+                    result = st.session_state["rag_chain"].invoke(
+                        {"question": user_input, "chat_history": chat_history}
+                    )
+                    answer = result["answer"]
+                    sources = result.get("source_documents", [])
+
+                st.markdown(answer)
+
+                if sources:
+                    with st.expander("📎 Sources from your study material", expanded=False):
+                        seen = set()
+                        for doc in sources:
+                            src = doc.metadata.get("source", "Unknown")
+                            page = doc.metadata.get("page", "?")
+                            label = f"{src}  — page {page}"
+                            if label not in seen:
+                                st.markdown(f"- `{label}`")
+                                seen.add(label)
+
+                st.session_state["messages"].append({"role": "assistant", "content": answer})
+
+            except Exception as e:
+                err_msg = str(e)
+                provider = get_config("LLM_PROVIDER", "openai").lower()
+                if "rate_limit" in err_msg.lower() or "quota" in err_msg.lower() or "429" in err_msg:
+                    if provider == "groq":
+                        st.warning("⚠️ **Groq Rate Limit**: Please wait ~10-15 seconds and try again.")
+                    else:
+                        st.error(
+                            "⚠️ **OpenAI Quota / Rate Limit Exceeded**: Check billing on "
+                            "[OpenAI Billing](https://platform.openai.com/account/billing/overview) "
+                            "or switch to Groq in Secrets."
+                        )
+                else:
+                    st.error(f"⚠️ Error processing your request: {err_msg}")
