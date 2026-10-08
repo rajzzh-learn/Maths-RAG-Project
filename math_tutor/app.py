@@ -248,115 +248,46 @@ for msg in st.session_state["messages"]:
         st.markdown(msg["content"])
 
 
-# -- Helper: vision LLM call -----------------------------------------------
+# ── Helper: call vision-capable LLM directly (image path) ──────────────
 def _ask_vision_llm(question: str, image_data_uri: str, context_text: str) -> str:
-    provider = get_config("LLM_PROVIDER", "openai").lower()
-    vision_content = [
-        {
-            "type": "text",
-            "text": (
-                "You are an expert Class 12 CBSE Mathematics teacher.\n\n"
-                f"Context from the student's study materials:\n{context_text}\n\n"
-                f"The student has attached an image and asks:\n{question}"
-            ),
-        },
-        {"type": "image_url", "image_url": {"url": image_data_uri}},
-    ]
-    if provider == "groq":
-        from openai import OpenAI
-        client = OpenAI(api_key=get_config("GROQ_API_KEY"), base_url="https://api.groq.com/openai/v1")
-        resp = client.chat.completions.create(
-            model=get_config("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
-            messages=[{"role": "user", "content": vision_content}],
-            max_tokens=4096, temperature=0.3,
-        )
-        return resp.choices[0].message.content
-    elif provider == "openai":
-        from openai import OpenAI
-        client = OpenAI(api_key=get_config("OPENAI_API_KEY"))
-        resp = client.chat.completions.create(
-            model=get_config("OPENAI_MODEL", "gpt-4o"),
-            messages=[{"role": "user", "content": vision_content}],
-            max_tokens=4096, temperature=0.3,
-        )
-        return resp.choices[0].message.content
-    else:
+    """
+    Send a multimodal (text + image) message to Google Gemini Flash (free tier).
+    Vision is always handled by Gemini regardless of LLM_PROVIDER,
+    since Groq has no vision models and OpenAI requires paid credits.
+    Falls back gracefully when GOOGLE_API_KEY is not set.
+    """
+    import base64, re as _re
+    from google import genai
+    from google.genai import types
+
+    google_key = get_config("GOOGLE_API_KEY")
+    if not google_key:
         return (
-            "⚠️ **Image vision is not supported for the `watsonx` provider.** "
-            "Please switch to `groq` or `openai`, or describe your question in text."
+            "⚠️ **Image analysis requires a `GOOGLE_API_KEY`** (free).\n\n"
+            "👉 Get one at https://aistudio.google.com/app/apikey — it's free, no billing needed.\n"
+            "Then add `GOOGLE_API_KEY = \"AIza...\"` to your `.env` file or Streamlit Secrets and reload the app."
         )
 
-# ── Chat input ─────────────────────────────────────────────────────────────
-if user_input := st.chat_input("Ask your Math teacher …"):
-    # Show student message
-    st.session_state["messages"].append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
-        st.markdown(user_input)
+    # Extract raw base64 bytes from the data URI (data:<mime>;base64,<data>)
+    match = _re.match(r"data:(?P<mime>[^;]+);base64,(?P<data>.+)", image_data_uri)
+    if not match:
+        return "⚠️ Could not parse the attached image. Please try uploading it again."
+    mime_type = match.group("mime")
+    image_bytes = base64.b64decode(match.group("data"))
 
-    # Get answer from RAG chain
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking …"):
-            # Limit chat history to the last 2 turns (4 messages) to minimize prompt token footprint
-            recent_messages = st.session_state["messages"][:-1]
-            if len(recent_messages) > 4:
-                recent_messages = recent_messages[-4:]
-            clean_history = [{"role": m["role"], "content": m["content"]} for m in recent_messages]
-            chat_history = convert_history(clean_history)
+    prompt = (
+        "You are an expert Class 12 CBSE Mathematics teacher.\n\n"
+        f"Context from the student's study materials:\n{context_text}\n\n"
+        f"The student has attached an image and asks:\n{question}"
+    )
 
-            try:
-                if attachment_image_uri is not None:
-                    retriever = st.session_state["vector_store"].as_retriever(
-                        search_type="mmr", search_kwargs={"k": 6, "fetch_k": 20},
-                    )
-                    source_docs = retriever.invoke(user_input)
-                    context_text = "\n\n".join(
-                        f"Document {i+1} (Source: {d.metadata.get('source','?')}, "
-                        f"Page: {d.metadata.get('page','?')}):\n{d.page_content}"
-                        for i, d in enumerate(source_docs)
-                    )
-                    answer = _ask_vision_llm(user_input, attachment_image_uri, context_text)
-                    sources = source_docs
-                elif attachment_text is not None:
-                    augmented = f"{user_input}\n\n--- Attached file: {attachment_name} ---\n{attachment_text}"
-                    result = st.session_state["rag_chain"].invoke(
-                        {"question": augmented, "chat_history": chat_history}
-                    )
-                    answer = result["answer"]
-                    sources = result.get("source_documents", [])
-                else:
-                    result = st.session_state["rag_chain"].invoke(
-                        {"question": user_input, "chat_history": chat_history}
-                    )
-                    answer = result["answer"]
-                    sources = result.get("source_documents", [])
+    client = genai.Client(api_key=google_key)
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=[
+            prompt,
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        ],
+    )
+    return response.text
 
-                st.markdown(answer)
-
-                # Show source references (collapsed)
-                if sources:
-                    with st.expander("📎 Sources from your study material", expanded=False):
-                        seen = set()
-                        for doc in sources:
-                            src = doc.metadata.get("source", "Unknown")
-                            page = doc.metadata.get("page", "?")
-                            label = f"{src}  — page {page}"
-                            if label not in seen:
-                                st.markdown(f"- `{label}`")
-                                seen.add(label)
-
-                st.session_state["messages"].append({"role": "assistant", "content": answer})
-            except Exception as e:
-                err_msg = str(e)
-                provider = get_config("LLM_PROVIDER", "openai").lower()
-                if "rate_limit" in err_msg.lower() or "quota" in err_msg.lower() or "429" in err_msg:
-                    if provider == "groq":
-                        st.warning(
-                            "⚠️ **Groq Rate Limit (RPM/TPM)**: Groq's free tier has a per-minute token limit. Please wait ~10-15 seconds and try again."
-                        )
-                    else:
-                        st.error(
-                            "⚠️ **OpenAI Quota / Rate Limit Exceeded**: Your OpenAI account has run out of credits or reached its usage limit.\n\n"
-                            "👉 Please check your billing on [OpenAI Billing](https://platform.openai.com/account/billing/overview) or switch to Groq (free) in Secrets."
-                        )
-                else:
-                    st.error(f"⚠️ Error processing your request: {err_msg}")
