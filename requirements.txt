@@ -21,7 +21,7 @@ cryptography>=50.0.0
 
 # Embeddings — pin to 3.x to avoid torch device NotImplementedError on Streamlit Cloud
 sentence-transformers==3.4.1
-
+torch>=2.6.0
 # UI
 
 # Image processing (file attachment feature)
