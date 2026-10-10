@@ -31,7 +31,7 @@ st.set_page_config(
 )
 
 st.title("📐 Class 12 Math Tutor")
-st.caption("Powered by your NCERT notes, exemplar, and PYQs — 2027 Board Exam Edition")
+st.caption("Powered by your NCERT notes, solutions, exemplar, PYQs & SSM papers — 2027 Board Exam Edition")
 
 # ── Sidebar ────────────────────────────────────────────────────────────────
 with st.sidebar:
