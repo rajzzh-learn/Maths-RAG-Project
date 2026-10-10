@@ -160,6 +160,27 @@ with st.sidebar:
 - [2025 Question Paper]({REPO}/PYQ/2413-1_65-1-1_Mathematics.pdf)
 """)
 
+    with st.expander("📚 NCERT Solutions"):
+        st.markdown(f"""
+- [Ch 1 — Relations and Functions]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%201%20Relations%20And%20Functions.pdf)
+- [Ch 2 — Inverse Trigonometric Functions]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%202%20Inverse%20Trigonometric%20Functions.pdf)
+- [Ch 3 — Matrices]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%203%20Matrices.pdf)
+- [Ch 4 — Determinants]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%204%20Determinants.pdf)
+- [Ch 5 — Continuity and Differentiability]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%205%20Continuity%20And%20Differentiability.pdf)
+- [Ch 6 — Application of Derivatives]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%206%20Application%20Of%20Derivatives.pdf)
+- [Ch 8 — Application of Integrals]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%208%20Application%20Of%20Integrals.pdf)
+- [Ch 9 — Differential Equations]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%209%20Differential%20Equations.pdf)
+- [Ch 10 — Vector Algebra]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%2010%20Vector%20Algebra.pdf)
+- [Ch 11 — Three Dimensional Geometry]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%2011%20Three%20Dimensional%20Geometry.pdf)
+- [Ch 12 — Linear Programming]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%2012%20Linear%20Programming.pdf)
+- [Ch 13 — Probability]({REPO}/Ncert%20Solutions/Class%2012%20Maths%20Chapter%2013%20Probability.pdf)
+""")
+
+    with st.expander("🏫 SSM Question Papers"):
+        st.markdown(f"""
+- [SSM School Math Test]({REPO}/SSM%20Question%20Paper%20so%20far/SSM%20School%20Math%20Test.pdf)
+""")
+
     with st.expander("📋 Secret Assignments"):
         st.markdown(f"""
 - [Day 1]({REPO}/Secret%20Assignment/Class%2012th%20Day%201%20Secret%20Assignment.pdf)
