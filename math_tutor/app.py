@@ -10,18 +10,24 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+import logging
+
 import streamlit as st
 from math_tutor.config import get_config
 from math_tutor.ingest import build_vector_store
 from math_tutor.rag_chain import build_rag_chain, convert_history
 from math_tutor.file_utils import (
-    extract_text_from_pdf,
-    extract_text_from_txt,
-    image_to_base64_uri,
-    is_image,
+    Attachment,
+    build_attachment,
+    MAX_FILES,
+    MAX_FILE_BYTES,
     SUPPORTED_EXTS,
+    TOTAL_TEXT_BUDGET,
 )
+from math_tutor.render_utils import prepare_markdown
 from math_tutor.components.paste_button import paste_image_button
+
+logger = logging.getLogger(__name__)
 
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -255,24 +261,30 @@ if "messages" not in st.session_state:
         }
     ]
 
+def _show_attachments(attachments: list[dict]) -> None:
+    """Render attachment captions + previews for a chat message."""
+    for att in attachments:
+        st.caption(f"📎 **Attached:** `{att['name']}`")
+        if att.get("preview") is not None:
+            with st.expander(f"👁️ Preview — {att['name']}", expanded=False):
+                if att.get("is_image"):
+                    st.image(att["preview"], use_container_width=True)
+                else:
+                    st.text(str(att["preview"])[:2000])
+
+
 # Display existing messages
 for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
-        if msg.get("attachment_name"):
-            st.caption(f"📎 **Attached:** `{msg['attachment_name']}`")
-            if msg.get("attachment_preview"):
-                with st.expander("👁️ Attachment preview", expanded=False):
-                    if msg.get("attachment_is_image"):
-                        st.image(msg["attachment_preview"], use_container_width=True)
-                    else:
-                        st.text(msg["attachment_preview"][:2000])
-        st.markdown(msg["content"])
+        _show_attachments(msg.get("attachments", []))
+        # unsafe_allow_html is safe here: prepare_markdown sanitises with an allow-list
+        st.markdown(prepare_markdown(msg["content"]), unsafe_allow_html=True)
 
 
 # ── Helper: call vision-capable LLM directly (image path) ──────────────
-def _ask_vision_llm(question: str, image_data_uri: str, context_text: str) -> str:
+def _ask_vision_llm(question: str, image_data_uris: list[str], context_text: str) -> str:
     """
-    Send a multimodal (text + image) message to Google Gemini Flash (free tier).
+    Send a multimodal (text + image(s)) message to Google Gemini Flash (free tier).
     Vision is always handled by Gemini regardless of LLM_PROVIDER,
     since Groq has no vision models and OpenAI requires paid credits.
     Falls back gracefully when GOOGLE_API_KEY is not set.
@@ -289,26 +301,30 @@ def _ask_vision_llm(question: str, image_data_uri: str, context_text: str) -> st
             "Then add `GOOGLE_API_KEY = \"AIza...\"` to your `.env` file or Streamlit Secrets and reload the app."
         )
 
-    # Extract raw base64 bytes from the data URI (data:<mime>;base64,<data>)
-    match = _re.match(r"data:(?P<mime>[^;]+);base64,(?P<data>.+)", image_data_uri)
-    if not match:
-        return "⚠️ Could not parse the attached image. Please try uploading it again."
-    mime_type = match.group("mime")
-    image_bytes = base64.b64decode(match.group("data"))
+    image_parts = []
+    for uri in image_data_uris:
+        # Extract raw base64 bytes from the data URI (data:<mime>;base64,<data>)
+        match = _re.match(r"data:(?P<mime>[^;]+);base64,(?P<data>.+)", uri)
+        if not match:
+            return "⚠️ Could not parse an attached image. Please try uploading it again."
+        image_parts.append(
+            types.Part.from_bytes(
+                data=base64.b64decode(match.group("data")),
+                mime_type=match.group("mime"),
+            )
+        )
 
     prompt = (
         "You are an expert Class 12 CBSE Mathematics teacher.\n\n"
         f"Context from the student's study materials:\n{context_text}\n\n"
-        f"The student has attached an image and asks:\n{question}"
+        "Write all mathematics in LaTeX using $...$ for inline and $$...$$ for display equations.\n\n"
+        f"The student has attached image(s) and asks:\n{question}"
     )
 
     client = genai.Client(api_key=google_key)
     response = client.models.generate_content(
         model="gemini-3.5-flash-lite",
-        contents=[
-            prompt,
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-        ],
+        contents=[prompt, *image_parts],
     )
     return response.text
 
@@ -320,11 +336,16 @@ ext_list = ", ".join(f".{e}" for e in sorted(SUPPORTED_EXTS))
 
 col_upload, col_paste = st.columns([3, 1], vertical_alignment="bottom")
 with col_upload:
-    uploaded_file = st.file_uploader(
-        f"📎 Attach a file — {ext_list}",
-        type=list(SUPPORTED_EXTS),
+    uploaded_files = st.file_uploader(
+        f"📎 Attach files (up to {MAX_FILES}) — {ext_list}",
+        type=sorted(SUPPORTED_EXTS),
+        accept_multiple_files=True,
         label_visibility="visible",
-        help="Attach an image (diagram / question screenshot), PDF, or .txt file.",
+        help=(
+            f"Attach images, PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), "
+            f"HTML, or text files. Max {MAX_FILES} files, "
+            f"{MAX_FILE_BYTES // (1024 * 1024)} MB each. Legacy .doc/.ppt/.xls are not supported."
+        ),
     )
 with col_paste:
     paste_result = paste_image_button(
@@ -335,54 +356,46 @@ with col_paste:
     )
 
 if user_input := st.chat_input("Ask your Mathematics teacher …"):
-    attachment_name: str | None = None
-    attachment_text: str | None = None
-    attachment_image_uri: str | None = None
-    attachment_preview = None
-    attachment_is_image = False
+    attachments: list[Attachment] = []
+    skipped: list[str] = []
 
-    # Clipboard paste takes priority over file uploader
+    # Clipboard paste
     if paste_result.image_data is not None:
         import io as _io
         buf = _io.BytesIO()
         paste_result.image_data.save(buf, format="PNG")
-        file_bytes = buf.getvalue()
-        attachment_name = "pasted-image.png"
-        attachment_image_uri, _ = image_to_base64_uri(file_bytes, attachment_name)
-        attachment_preview = file_bytes
-        attachment_is_image = True
-    elif uploaded_file is not None:
-        attachment_name = uploaded_file.name
-        file_bytes = uploaded_file.read()
-        if is_image(attachment_name):
-            attachment_image_uri, _ = image_to_base64_uri(file_bytes, attachment_name)
-            attachment_preview = file_bytes
-            attachment_is_image = True
-        elif attachment_name.lower().endswith(".pdf"):
-            attachment_text = extract_text_from_pdf(file_bytes)
-            attachment_preview = attachment_text
-        else:
-            attachment_text = extract_text_from_txt(file_bytes)
-            attachment_preview = attachment_text
+        attachments.append(build_attachment("pasted-image.png", buf.getvalue()))
+
+    # Uploaded files (count-capped; each validated and parsed independently)
+    files = list(uploaded_files or [])
+    if len(files) > MAX_FILES:
+        skipped.append(f"Only the first {MAX_FILES} files were used.")
+        files = files[:MAX_FILES]
+    for f in files:
+        try:
+            attachments.append(build_attachment(f.name, f.getvalue()))
+        except ValueError as ve:
+            skipped.append(f"`{f.name}`: {ve}")
+        except Exception:
+            logger.exception("Attachment parsing failed")
+            skipped.append(f"`{f.name}`: could not read this file (corrupt or password-protected?).")
+
+    image_uris = [a.image_uri for a in attachments if a.is_image and a.image_uri]
+    text_attachments = [a for a in attachments if not a.is_image and a.text]
 
     user_msg: dict = {
         "role": "user",
         "content": user_input,
-        "attachment_name": attachment_name,
-        "attachment_preview": attachment_preview,
-        "attachment_is_image": attachment_is_image,
+        "attachments": [
+            {"name": a.name, "is_image": a.is_image, "preview": a.preview} for a in attachments
+        ],
     }
     st.session_state["messages"].append(user_msg)
 
     with st.chat_message("user"):
-        if attachment_name:
-            st.caption(f"📎 **Attached:** `{attachment_name}`")
-            if attachment_preview is not None:
-                with st.expander("👁️ Attachment preview", expanded=False):
-                    if attachment_is_image:
-                        st.image(attachment_preview, use_container_width=True)
-                    else:
-                        st.text(str(attachment_preview)[:2000])
+        _show_attachments(user_msg["attachments"])
+        for note in skipped:
+            st.warning(f"⚠️ {note}")
         st.markdown(user_input)
 
     with st.chat_message("assistant"):
@@ -394,7 +407,17 @@ if user_input := st.chat_input("Ask your Mathematics teacher …"):
             chat_history = convert_history(clean_history)
 
             try:
-                if attachment_image_uri is not None:
+                # Share one text budget across all text attachments
+                augmented = user_input
+                if text_attachments:
+                    per_file = max(1000, TOTAL_TEXT_BUDGET // len(text_attachments))
+                    blocks = [
+                        f"--- Attached file: {a.name} ---\n{a.text[:per_file]}"
+                        for a in text_attachments
+                    ]
+                    augmented = f"{user_input}\n\n" + "\n\n".join(blocks)
+
+                if image_uris:
                     retriever = st.session_state["vector_store"].as_retriever(
                         search_type="mmr", search_kwargs={"k": 6, "fetch_k": 20},
                     )
@@ -404,23 +427,16 @@ if user_input := st.chat_input("Ask your Mathematics teacher …"):
                         f"Page: {d.metadata.get('page','?')}):\n{d.page_content}"
                         for i, d in enumerate(source_docs)
                     )
-                    answer = _ask_vision_llm(user_input, attachment_image_uri, context_text)
+                    answer = _ask_vision_llm(augmented, image_uris, context_text)
                     sources = source_docs
-                elif attachment_text is not None:
-                    augmented = f"{user_input}\n\n--- Attached file: {attachment_name} ---\n{attachment_text}"
+                else:
                     result = st.session_state["rag_chain"].invoke(
                         {"question": augmented, "chat_history": chat_history}
                     )
                     answer = result["answer"]
                     sources = result.get("source_documents", [])
-                else:
-                    result = st.session_state["rag_chain"].invoke(
-                        {"question": user_input, "chat_history": chat_history}
-                    )
-                    answer = result["answer"]
-                    sources = result.get("source_documents", [])
 
-                st.markdown(answer)
+                st.markdown(prepare_markdown(answer), unsafe_allow_html=True)
 
                 if sources:
                     with st.expander("📎 Sources from your study material", expanded=False):
@@ -448,4 +464,5 @@ if user_input := st.chat_input("Ask your Mathematics teacher …"):
                             "or switch to Groq in Secrets."
                         )
                 else:
-                    st.error(f"⚠️ Error processing your request: {err_msg}")
+                    logger.exception("Chat request failed")
+                    st.error("⚠️ Something went wrong while processing your request. Please try again.")

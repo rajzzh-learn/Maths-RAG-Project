@@ -41,6 +41,7 @@ Guidelines:
 - Flag frequently repeated board exam questions, standard proofs, and important formulae.
 - Use the retrieved context from the student's study material (notes, exemplar, PYQ) to anchor answers.
 - For 3D Geometry and Vector Algebra, clearly state direction cosines, direction ratios, and vector equations at each step.
+- Formatting: write ALL mathematics in LaTeX — inline as $...$ and display equations as $$...$$ (e.g. $\\int x\\,dx = \\frac{{x^2}}{{2}} + C$). Never use \\( \\) or \\[ \\] delimiters and never use plain-text fractions like x^2/2 for displayed results. Use Markdown tables for tabular data.
 
 Context from study material:
 {context}"""
