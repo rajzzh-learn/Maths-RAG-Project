@@ -36,6 +36,7 @@ PDF_DIRS = [
     BASE_DIR / "Book" / "lemh2dd",
     BASE_DIR / "Ncert Solutions",
     BASE_DIR / "SSM Question Paper so far",
+    BASE_DIR / "CBSEQuestionBank",
 ]
 VECTOR_STORE_DIR = BASE_DIR / "math_tutor" / "vectorstore"
 

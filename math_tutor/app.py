@@ -122,6 +122,11 @@ with st.sidebar:
 - [Practice Sets]({REPO}/Book/lemh2dd/lemh2ps.pdf)
 """)
 
+    with st.expander("🏆 CBSE Question Bank"):
+        st.markdown(f"""
+- [Official CBSE Mathematics Question Bank (Class XII)]({REPO}/CBSEQuestionBank/QuestionBankMathematicsXII.pdf)
+""")
+
     with st.expander("🔬 Exemplar"):
         st.markdown(f"""
 - [Ch 1 — Relations and Functions]({REPO}/Exemplar/NCERT%20Exemplar%20for%20Class%2012%20Maths%20Chapter%201%20-%20Relations%20And%20Functions%20(Book%20Solutions).pdf)
