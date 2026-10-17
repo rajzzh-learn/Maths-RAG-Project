@@ -15,7 +15,7 @@ import logging
 import streamlit as st
 from math_tutor.config import get_config
 from math_tutor.ingest import build_vector_store
-from math_tutor.rag_chain import build_rag_chain, convert_history
+from math_tutor.rag_chain import build_rag_chain, convert_history, invoke_with_retry
 from math_tutor.file_utils import (
     Attachment,
     build_attachment,
@@ -458,6 +458,10 @@ if user_input := st.chat_input("Ask your Mathematics teacher …"):
 
             except Exception as e:
                 err_msg = str(e)
+                if "collection" in err_msg.lower() and "does not exist" in err_msg.lower():
+                    st.session_state["vector_store"] = build_vector_store(force_rebuild=False)
+                    st.session_state["rag_chain"] = build_rag_chain(st.session_state["vector_store"])
+                    st.rerun()
                 provider = get_config("LLM_PROVIDER", "openai").lower()
                 if "rate_limit" in err_msg.lower() or "quota" in err_msg.lower() or "429" in err_msg:
                     if provider == "groq":
