@@ -186,11 +186,11 @@ with st.sidebar:
 
     with st.expander("📄 Previous Year Questions (PYQ)"):
         st.markdown(f"""
-- [2024 Question Paper (Set 1)]({REPO}/PYQ/65-1-1%20MATHEMATICS.pdf)
-- [2024 Question Paper (Set 1 Alt)]({REPO}/PYQ/65-1-1%20Mathematcs.pdf)
-- [2024 Question Paper]({REPO}/PYQ/65-1-1_Mathematics.pdf)
-- [2024 Question Paper (Combined)]({REPO}/PYQ/65_1_1_Mathematics.pdf)
-- [2025 Question Paper]({REPO}/PYQ/2413-1_65-1-1_Mathematics.pdf)
+- [2022 Question Paper]({REPO}/PYQ/65-1-1%20Mathematcs%202022.pdf)
+- [2023 Question Paper]({REPO}/PYQ/65-1-1%20MATHEMATICS%202023.pdf)
+- [2024 Question Paper]({REPO}/PYQ/65_1_1_Mathematics%202024.pdf)
+- [2025 Question Paper]({REPO}/PYQ/65-1-1_Mathematics%202025.pdf)
+- [2026 Question Paper]({REPO}/PYQ/2413-1_65-1-1_Mathematics%202026.pdf)
 """)
 
     with st.expander("📋 Secret Assignments"):

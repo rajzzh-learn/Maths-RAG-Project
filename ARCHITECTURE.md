@@ -433,9 +433,20 @@ Layer 3 — Validate   Gemini and/or OpenAI GPT-4o fact-check the answer, with a
 | Rate limits | `invoke_with_retry()` | Waits for the provider-advertised delay and retries. |
 | Chat history | `convert_history()` | Recent turns kept verbatim, older turns compacted to a character budget. |
 | Validation | `shared_tutor.validator.validate_answer()` | Multi-LLM: Gemini and OpenAI GPT-4o check the answer against the retrieved context (`VALIDATION_PROVIDER` = first choice, the other is the automatic fallback; each needs its own API key). Long answers are checked in ~5000-character sections, so nothing is clipped. The app shows ✅ verified / ⚠️ corrected, or the reason it was not verified. A validator is also told to remove any past-paper question that is not in the source material or is repeated. |
-| Past-paper questions | `build_retrieve_fn()` + prompt rule 4 | Year-wise / PYQ / question-paper queries retrieve 14 chunks instead of 6 (`PYQ_RETRIEVER_TOP_K`). Every chunk is labelled `[Source: file, page]`. The prompt forbids inventing or repeating questions and requires "Not found in the retrieved material" for gaps. |
+| Past-paper questions | `build_retrieve_fn()` + prompt rule 4 | Year-wise / PYQ / question-paper queries retrieve 14 chunks instead of 6 (`PYQ_RETRIEVER_TOP_K`). Every chunk is labelled `[Source: file, page]`. The prompt forbids inventing or repeating questions and requires "Not found in the retrieved material" for gaps. When the question names years (e.g. `2023` or `2013 to 2026`), chunks from the PYQ files whose name contains that year are also fetched, because plain similarity search ignores file names. Chunk text starts with `[file name | Page n]`. |
 | Embeddings | `<subject>_tutor/ingest.py` | ONNX `all-MiniLM-L6-v2` (`SafeMiniLMEmbeddings`) — same vectors as the HuggingFace model, no PyTorch, avoids the Streamlit Cloud meta-device `NotImplementedError`. Existing vector stores remain valid. |
 
 Required secrets / environment variables (see `.env.example`):
 `LLM_PROVIDER`, `GROQ_API_KEY` (or `OPENAI_API_KEY` / `WATSONX_*`),
 `ENABLE_VALIDATION=true` plus `GOOGLE_API_KEY` (Gemini) and/or `OPENAI_API_KEY` (GPT-4o) for Layer 3 — set both for fallback; `VALIDATION_PROVIDER` picks the first choice; optional `OPENAI_VALIDATOR_MODEL`, `PYQ_RETRIEVER_TOP_K`.
+
+### Maths PYQ papers (2022 – 2026)
+
+`PYQ/` holds one paper per year, with the year in the file name (`... 2022.pdf` to `... 2026.pdf`). Name new papers the same way: the year in the name is what lets a "2023 paper" question find the right file.
+
+| Year | Text source |
+|---|---|
+| 2023, 2024, 2026 | PDF text layer |
+| 2022, 2025 | Scanned images: OCR sidecar `<file>.pdf.ocr.json` made by `tools/ocr_pdf.py` |
+
+OCR limits: English only (Hindi lines are dropped); fractions, matrices and integrals are only approximately recovered, and the 2022 file has just 8 pages (about 14 questions), so it is incomplete. After adding or replacing a paper run `python -m math_tutor.ingest` and commit `math_tutor/vectorstore/`.
